@@ -38,6 +38,21 @@ function getBadgeClass(status) {
   return 'badge badge-connecting';
 }
 
+function getWebSocketUrl(roomId, playerId) {
+  const configuredUrl = process.env.NEXT_PUBLIC_WS_URL;
+
+  if (configuredUrl) {
+    const url = new URL(configuredUrl);
+    url.searchParams.set('room', roomId);
+    url.searchParams.set('player', playerId);
+    return url.toString();
+  }
+
+  const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+  const wsPort = process.env.NEXT_PUBLIC_WS_PORT || '8081';
+  return `${protocol}://${window.location.hostname}:${wsPort}/ws?room=${roomId}&player=${playerId}`;
+}
+
 export default function Home() {
   const canvasRef = useRef(null);
   const wsRef = useRef(null);
@@ -53,6 +68,7 @@ export default function Home() {
   const gameOverRef = useRef(false);
 
   const [roomId, setRoomId] = useState('');
+  const [socketUrl, setSocketUrl] = useState('');
   const [scores, setScores] = useState({ left: 0, right: 0 });
   const [role, setRole] = useState(null);
   const [connectionKey, setConnectionKey] = useState(0);
@@ -327,17 +343,11 @@ export default function Home() {
     setRoomId(nextRoomId);
     const playerId = getStoredPlayerId();
 
-    const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-    const currentHost = window.location.host;
-    const alternateHost = window.location.hostname === 'localhost'
-      ? currentHost.replace('localhost', '127.0.0.1')
-      : window.location.hostname === '127.0.0.1'
-        ? currentHost.replace('127.0.0.1', 'localhost')
-        : null;
-    const hosts = [currentHost, alternateHost].filter(Boolean);
     let closedByCleanup = false;
     let roomAssigned = false;
     let connectTimer = null;
+    const wsUrl = getWebSocketUrl(nextRoomId, playerId);
+    setSocketUrl(wsUrl.replace(/player=[^&]+/, 'player=...'));
 
     const showConnectionFailed = () => {
       setStatus({ text: 'Connection failed', kind: 'error' });
@@ -348,15 +358,26 @@ export default function Home() {
       });
     };
 
-    const attachHandlers = (ws, host, hostIndex) => {
-      wsRef.current = ws;
+    const ws = new WebSocket(wsUrl);
+    wsRef.current = ws;
 
-      clearTimeout(connectTimer);
-      connectTimer = setTimeout(() => {
-        if (!roomAssigned && ws.readyState === WebSocket.CONNECTING) {
-          ws.close();
-        }
-      }, 3000);
+    clearTimeout(connectTimer);
+    connectTimer = setTimeout(() => {
+      if (!roomAssigned && ws.readyState === WebSocket.CONNECTING) {
+        ws.close();
+      }
+    }, 3000);
+
+    setStatus({ text: 'Connecting...', kind: 'connecting' });
+    setOverlay({
+      title: 'Connecting',
+      line1: `Trying ${wsUrl.replace(/player=[^&]+/, 'player=...')}`,
+      line2: 'Setting up the game room.',
+      spinner: true,
+    });
+
+    const attachHandlers = () => {
+      wsRef.current = ws;
 
       ws.onopen = () => {
         clearTimeout(connectTimer);
@@ -364,7 +385,7 @@ export default function Home() {
       setOverlay({
         title: 'Waiting...',
         line1: 'Waiting for another player to join this room.',
-          line2: `Connected through ${host}. Share the invite link from the top bar.`,
+          line2: 'Connected to the game socket. Share the invite link from the top bar.',
         spinner: true,
       });
       };
@@ -532,18 +553,15 @@ export default function Home() {
       };
 
       ws.onerror = () => {
+        if (wsRef.current !== ws) return;
         clearTimeout(connectTimer);
       };
 
       ws.onclose = () => {
+        if (wsRef.current !== ws) return;
         clearTimeout(connectTimer);
 
         if (closedByCleanup) return;
-
-        if (!roomAssigned && hosts[hostIndex + 1]) {
-          openSocket(hostIndex + 1);
-          return;
-        }
 
         if (!roomAssigned) {
           showConnectionFailed();
@@ -556,19 +574,7 @@ export default function Home() {
       };
     };
 
-    const openSocket = (hostIndex = 0) => {
-      const host = hosts[hostIndex];
-      setStatus({ text: 'Connecting...', kind: 'connecting' });
-      setOverlay({
-        title: 'Connecting',
-        line1: `Trying ${protocol}://${host}/ws`,
-        line2: hostIndex > 0 ? 'Trying the local fallback address.' : 'Setting up the game room.',
-        spinner: true,
-      });
-      attachHandlers(new WebSocket(`${protocol}://${host}/ws?room=${nextRoomId}&player=${playerId}`), host, hostIndex);
-    };
-
-    openSocket();
+    attachHandlers();
 
     return () => {
       closedByCleanup = true;
@@ -688,6 +694,11 @@ export default function Home() {
       <section className="invite-row" aria-label="Invite link">
         <span>Room {roomId || '...'}</span>
         <input value={inviteUrl} readOnly aria-label="Invite URL" />
+      </section>
+
+      <section className="invite-row" aria-label="Socket target">
+        <span>Socket</span>
+        <input value={socketUrl || 'Not connected yet'} readOnly aria-label="WebSocket URL" />
       </section>
 
       <section className="canvas-wrap">
