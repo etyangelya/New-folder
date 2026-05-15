@@ -1,0 +1,276 @@
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#__next {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 50% 0%, rgba(63, 121, 183, 0.44), transparent 34rem),
+    linear-gradient(135deg, #07101f 0%, #14171d 46%, #0b1019 100%);
+  color: #fff;
+  font-family: Arial, Helvetica, sans-serif;
+  overflow: hidden;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+button {
+  border: 0;
+  border-radius: 6px;
+  padding: 9px 14px;
+  font-weight: 700;
+  font-size: 13px;
+  color: #07101f;
+  background: #fff;
+  cursor: pointer;
+  transition: filter 0.15s, opacity 0.15s;
+}
+
+button:hover:not(:disabled) {
+  filter: brightness(0.92);
+}
+
+button:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+
+.game-shell {
+  width: min(96vw, 980px);
+  min-height: 100vh;
+  margin: 0 auto;
+  display: grid;
+  align-content: center;
+  gap: 12px;
+  padding: 18px 0;
+}
+
+.top-bar,
+.invite-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  backdrop-filter: blur(8px);
+}
+
+.title {
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.scoreboard {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 28px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.score-label {
+  display: block;
+  margin-bottom: 2px;
+  font-size: 11px;
+  text-align: center;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  opacity: 0.7;
+}
+
+.score-box {
+  min-width: 58px;
+  text-align: center;
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.badge {
+  padding: 5px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+
+.badge-connecting {
+  background: rgba(255, 200, 0, 0.15);
+  color: #ffd040;
+  border: 1px solid rgba(255, 200, 0, 0.3);
+}
+
+.badge-waiting {
+  background: rgba(255, 150, 0, 0.15);
+  color: #ffaa40;
+  border: 1px solid rgba(255, 150, 0, 0.3);
+}
+
+.badge-ready {
+  background: rgba(0, 220, 120, 0.15);
+  color: #40ffaa;
+  border: 1px solid rgba(0, 220, 120, 0.3);
+}
+
+.badge-error {
+  background: rgba(255, 80, 80, 0.15);
+  color: #ff8080;
+  border: 1px solid rgba(255, 80, 80, 0.3);
+}
+
+.badge-p1 {
+  background: rgba(112, 211, 255, 0.15);
+  color: #70d3ff;
+  border: 1px solid rgba(112, 211, 255, 0.3);
+}
+
+.badge-p2 {
+  background: rgba(255, 120, 120, 0.15);
+  color: #ff7878;
+  border: 1px solid rgba(255, 120, 120, 0.3);
+}
+
+.invite-row {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.invite-row span {
+  flex: 0 0 auto;
+  font-weight: 700;
+  color: #fff;
+}
+
+.invite-row input {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 6px;
+  padding: 8px 10px;
+  color: rgba(255, 255, 255, 0.82);
+  background: rgba(0, 0, 0, 0.22);
+}
+
+.canvas-wrap {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  background: #08101e;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+}
+
+canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  cursor: none;
+}
+
+.overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  text-align: center;
+  pointer-events: none;
+}
+
+.message {
+  max-width: 560px;
+  padding: 24px 28px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.58);
+  backdrop-filter: blur(14px);
+}
+
+.message h1 {
+  margin: 0 0 10px;
+  font-size: clamp(24px, 5vw, 42px);
+}
+
+.message p {
+  margin: 6px 0;
+  line-height: 1.5;
+  opacity: 0.88;
+}
+
+.help {
+  padding: 0 4px;
+  font-size: 13px;
+  line-height: 1.4;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.62);
+}
+
+.spin {
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  margin-right: 8px;
+  border: 3px solid rgba(255, 255, 255, 0.2);
+  border-top-color: #fff;
+  border-radius: 50%;
+  vertical-align: middle;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 720px) {
+  body {
+    overflow: auto;
+  }
+
+  .game-shell {
+    align-content: start;
+  }
+
+  .top-bar {
+    justify-content: center;
+  }
+
+  .title,
+  .scoreboard,
+  .controls {
+    width: 100%;
+    justify-content: center;
+    text-align: center;
+  }
+
+  .scoreboard {
+    order: -1;
+  }
+
+  .invite-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
