@@ -1,14 +1,8 @@
 const { createServer } = require('http');
-const next = require('next');
 const { WebSocketServer } = require('ws');
 
-const dev = process.env.NODE_ENV !== 'production';
-const hostname = process.env.HOST;
-const port = Number(process.env.PORT || 8080);
-
-const app = next({ dev });
-const handle = app.getRequestHandler();
-
+const hostname = process.env.HOST || '0.0.0.0';
+const port = Number(process.env.WS_PORT || process.env.PORT || 8081);
 const rooms = new Map();
 const RECONNECT_GRACE_MS = 30000;
 
@@ -78,123 +72,142 @@ function cleanupRoom(roomId) {
   }
 }
 
-app.prepare().then(() => {
-  const httpServer = createServer(async (req, res) => {
-    try {
-      await handle(req, res);
-    } catch (err) {
-      console.error(`HTTP error while handling ${req.url}:`, err);
-      if (!res.headersSent) {
-        res.writeHead(500, { 'Content-Type': 'text/plain' });
-      }
-      res.end('Internal server error');
-    }
+function roomSummary(room) {
+  return ['host', 'guest']
+    .map((role) => {
+      const seat = room[role];
+      if (!seat) return `${role}:empty`;
+      if (seat.ws && seat.ws.readyState === seat.ws.OPEN) return `${role}:online`;
+      return `${role}:reserved`;
+    })
+    .join(' ');
+}
+
+const httpServer = createServer((req, res) => {
+  if (req.url === '/health') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      ok: true,
+      rooms: rooms.size,
+      uptime: Math.round(process.uptime()),
+    }));
+    return;
+  }
+
+  res.writeHead(404, { 'Content-Type': 'text/plain' });
+  res.end('Ping Pong WebSocket server. Use /ws for game sockets.');
+});
+
+const wss = new WebSocketServer({
+  noServer: true,
+  perMessageDeflate: false,
+});
+
+httpServer.on('upgrade', (req, socket, head) => {
+  const url = new URL(req.url, `http://${req.headers.host}`);
+
+  if (url.pathname !== '/ws') {
+    console.log(`[upgrade rejected] ${url.pathname}`);
+    socket.destroy();
+    return;
+  }
+
+  wss.handleUpgrade(req, socket, head, (ws) => {
+    wss.emit('connection', ws, req);
   });
+});
 
-  const wss = new WebSocketServer({
-    noServer: true,
-    perMessageDeflate: true,
-  });
+wss.on('connection', (ws, req) => {
+  const url = new URL(req.url, `http://${req.headers.host}`);
+  const roomId = url.searchParams.get('room') || makeRoomId();
+  const playerId = url.searchParams.get('player') || makePlayerId();
+  const room = getRoom(roomId);
+  const reusableRole = getReusableRole(room, playerId);
+  const role = reusableRole || getOpenRole(room);
 
-  httpServer.on('upgrade', (req, socket, head) => {
-    const url = new URL(req.url, `http://${req.headers.host}`);
+  if (!role) {
+    console.log(`[room full] room=${roomId} player=${playerId}`);
+    send(ws, { type: 'roomFull', roomId });
+    ws.close(1008, 'Room is full');
+    return;
+  }
 
-    if (url.pathname !== '/ws') {
-      socket.destroy();
-      return;
-    }
+  const previousSeat = room[role];
+  if (previousSeat?.disconnectTimer) {
+    clearTimeout(previousSeat.disconnectTimer);
+  }
 
-    wss.handleUpgrade(req, socket, head, (ws) => {
-      wss.emit('connection', ws, req);
-    });
-  });
-
-  wss.on('connection', (ws, req) => {
-    const url = new URL(req.url, `http://${req.headers.host}`);
-    const roomId = url.searchParams.get('room') || makeRoomId();
-    const playerId = url.searchParams.get('player') || makePlayerId();
-    const room = getRoom(roomId);
-    const reusableRole = getReusableRole(room, playerId);
-    const role = reusableRole || getOpenRole(room);
-
-    if (!role) {
-      send(ws, { type: 'roomFull', roomId });
-      ws.close(1008, 'Room is full');
-      return;
-    }
-
-    const previousSeat = room[role];
-    if (previousSeat?.disconnectTimer) {
-      clearTimeout(previousSeat.disconnectTimer);
-    }
-
-    if (previousSeat?.ws && previousSeat.ws.readyState === previousSeat.ws.OPEN) {
-      previousSeat.ws.close(1000, 'Replaced by a newer connection');
-    }
-
-    room[role] = {
-      playerId,
-      ws,
-      disconnectTimer: null,
-    };
-
-    const ip = req.socket.remoteAddress;
-    const opponentPresent = hasConnectedOpponent(room, role);
-    console.log(`[+] ${role} ${reusableRole ? 'reconnected to' : 'joined'} room ${roomId} from ${ip}`);
-
-    send(ws, { type: 'role', role, roomId, playerId, opponentPresent });
-
-    if (opponentPresent) {
-      broadcast(room, ws, role === 'guest' ? { type: 'guestJoined' } : { type: 'opponentReconnected' });
-    }
-
-    ws.on('message', (data) => {
-      broadcast(room, ws, data);
-    });
-
-    ws.on('close', () => {
-      console.log(`[-] ${role} left room ${roomId}`);
-
-      const currentSeat = room[role];
-      if (!currentSeat || currentSeat.ws !== ws) return;
-
-      currentSeat.ws = null;
-      broadcast(room, ws, { type: 'opponentDisconnected', graceMs: RECONNECT_GRACE_MS });
-
-      currentSeat.disconnectTimer = setTimeout(() => {
-        const latestRoom = rooms.get(roomId);
-        if (!latestRoom || latestRoom[role]?.ws) return;
-
-        latestRoom[role] = null;
-        broadcast(latestRoom, null, { type: 'opponentLeft' });
-        cleanupRoom(roomId);
-      }, RECONNECT_GRACE_MS);
-
-      cleanupRoom(roomId);
-    });
-
-    ws.on('error', (err) => {
-      console.error(`WebSocket error in room ${roomId} (${role}): ${err.message}`);
-    });
-  });
-
-  const onListen = () => {
-    const boundHost = hostname || 'all local addresses';
-    console.log('===============================================');
-    console.log('  Ping Pong Next + WebSocket Server');
-    console.log('===============================================');
-    console.log(`  Local:   http://localhost:${port}`);
-    console.log(`  Bound:   ${boundHost}`);
-    console.log('  Invite:  open the page, then share its room URL');
-    console.log('===============================================');
+  room[role] = {
+    playerId,
+    ws,
+    disconnectTimer: null,
   };
 
-  if (hostname) {
-    httpServer.listen(port, hostname, onListen);
-  } else {
-    httpServer.listen(port, onListen);
+  if (previousSeat?.ws && previousSeat.ws.readyState === previousSeat.ws.OPEN) {
+    setTimeout(() => {
+      previousSeat.ws.close(1000, 'Replaced by a newer connection');
+    }, 0);
   }
-}).catch((err) => {
-  console.error('Failed to start server:', err);
-  process.exit(1);
+
+  const ip = req.socket.remoteAddress;
+  const opponentPresent = hasConnectedOpponent(room, role);
+  console.log(`[connect] room=${roomId} role=${role} reused=${Boolean(reusableRole)} ip=${ip} ${roomSummary(room)}`);
+
+  send(ws, { type: 'role', role, roomId, playerId, opponentPresent });
+
+  if (opponentPresent) {
+    broadcast(room, ws, role === 'guest' ? { type: 'guestJoined' } : { type: 'opponentReconnected' });
+  }
+
+  ws.on('message', (data, isBinary) => {
+    if (isBinary) {
+      console.log(`[ignored binary] room=${roomId} role=${role} bytes=${data.length}`);
+      return;
+    }
+
+    const text = data.toString();
+    console.log(`[message] room=${roomId} role=${role} ${text}`);
+    broadcast(room, ws, text);
+  });
+
+  ws.on('close', (code, reason) => {
+    console.log(`[close] room=${roomId} role=${role} code=${code} reason=${reason || 'none'}`);
+
+    const currentSeat = room[role];
+    if (!currentSeat || currentSeat.ws !== ws) return;
+
+    currentSeat.ws = null;
+    broadcast(room, ws, { type: 'opponentDisconnected', graceMs: RECONNECT_GRACE_MS });
+
+    currentSeat.disconnectTimer = setTimeout(() => {
+      const latestRoom = rooms.get(roomId);
+      if (!latestRoom || latestRoom[role]?.ws) return;
+
+      latestRoom[role] = null;
+      broadcast(latestRoom, null, { type: 'opponentLeft' });
+      cleanupRoom(roomId);
+      console.log(`[expired] room=${roomId} role=${role}`);
+    }, RECONNECT_GRACE_MS);
+
+    cleanupRoom(roomId);
+  });
+
+  ws.on('error', (err) => {
+    console.error(`[socket error] room=${roomId} role=${role} code=${err.code || 'unknown'} message=${err.message}`);
+  });
+});
+
+wss.on('error', (err) => {
+  console.error(`[server error] ${err.message}`);
+});
+
+httpServer.listen(port, hostname, () => {
+  console.log('===============================================');
+  console.log('  Ping Pong WebSocket Server');
+  console.log('===============================================');
+  console.log(`  WS:      ws://localhost:${port}/ws`);
+  console.log(`  Health:  http://localhost:${port}/health`);
+  console.log(`  Bound:   ${hostname}:${port}`);
+  console.log('  LAN:     share http://YOUR-LAN-IP:8080 from the Next server');
+  console.log('===============================================');
 });
