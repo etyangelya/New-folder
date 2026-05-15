@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Multiplayer Ping Pong</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; display: flex;
+      align-items: center; justify-content: center;
+      background: radial-gradient(circle at top, #18253f 0%, #070b13 60%);
+      font-family: Arial, Helvetica, sans-serif; color: #fff; overflow: hidden;
+    }
+    .game-shell { width: min(96vw, 980px); display: grid; gap: 14px; }
+    .top-bar {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 12px; flex-wrap: wrap; padding: 12px 16px;
+      background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.14);
+      border-radius: 18px; backdrop-filter: blur(8px);
+    }
+    .title { font-size: 20px; font-weight: 800; letter-spacing: 0.4px; }
+    .scoreboard {
+      display: flex; align-items: center; gap: 12px;
+      font-size: 28px; font-weight: 800; font-variant-numeric: tabular-nums;
+    }
+    .score-label {
+      font-size: 11px; text-transform: uppercase; opacity: 0.7;
+      letter-spacing: 1px; display: block; text-align: center; margin-bottom: 2px;
+    }
+    .score-box { min-width: 58px; text-align: center; }
+    .controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    button {
+      border: 0; border-radius: 999px; padding: 9px 16px;
+      font-weight: 700; font-size: 13px; color: #07101f; background: #fff;
+      cursor: pointer; transition: filter .15s, opacity .15s;
+    }
+    button:hover:not(:disabled) { filter: brightness(0.92); }
+    button:disabled { opacity: 0.38; cursor: not-allowed; }
+    .badge {
+      font-size: 12px; font-weight: 700; padding: 5px 13px;
+      border-radius: 999px; letter-spacing: 0.4px; white-space: nowrap;
+    }
+    .badge-connecting { background: rgba(255,200,0,.15); color: #ffd040; border: 1px solid rgba(255,200,0,.3); }
+    .badge-waiting    { background: rgba(255,150,0,.15); color: #ffaa40; border: 1px solid rgba(255,150,0,.3); }
+    .badge-ready      { background: rgba(0,220,120,.15); color: #40ffaa; border: 1px solid rgba(0,220,120,.3); }
+    .badge-error      { background: rgba(255,80,80,.15);  color: #ff8080; border: 1px solid rgba(255,80,80,.3); }
+    .badge-p1 { background: rgba(112,211,255,.15); color: #70d3ff; border: 1px solid rgba(112,211,255,.3); }
+    .badge-p2 { background: rgba(255,120,120,.15); color: #ff7878; border: 1px solid rgba(255,120,120,.3); }
+    .canvas-wrap {
+      position: relative; border-radius: 22px; overflow: hidden;
+      border: 1px solid rgba(255,255,255,0.16);
+      box-shadow: 0 24px 80px rgba(0,0,0,0.45); background: #08101e;
+    }
+    canvas { width: 100%; height: auto; display: block; cursor: none; }
+    .overlay {
+      position: absolute; inset: 0; display: grid;
+      place-items: center; text-align: center; padding: 20px;
+      pointer-events: none; /* let mouse events reach the canvas even while overlay shows */
+    }
+    .message { pointer-events: auto; /* but the message card itself is interactive */ }
+    .message {
+      max-width: 560px; padding: 24px 28px; border-radius: 20px;
+      background: rgba(0,0,0,.52); border: 1px solid rgba(255,255,255,0.16);
+      backdrop-filter: blur(14px);
+    }
+    .message h1 { margin: 0 0 10px; font-size: clamp(24px,5vw,42px); }
+    .message p  { margin: 6px 0; opacity: .88; line-height: 1.5; }
+    .hidden { display: none !important; }
+    .help { padding: 0 4px; font-size: 13px; color: rgba(255,255,255,.6); line-height: 1.4; text-align: center; }
+    kbd {
+      display: inline-block; padding: 2px 6px; border-radius: 6px;
+      background: rgba(255,255,255,.14); border: 1px solid rgba(255,255,255,.18);
+      color: #fff; font-size: 12px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spin {
+      display: inline-block; width: 18px; height: 18px;
+      border: 3px solid rgba(255,255,255,.2); border-top-color: #fff;
+      border-radius: 50%; animation: spin .8s linear infinite;
+      vertical-align: middle; margin-right: 8px;
+    }
+    @media (max-width: 640px) {
+      .top-bar { justify-content: center; }
+      .title { width: 100%; text-align: center; }
+      .scoreboard { order: -1; width: 100%; justify-content: center; }
+    }
+  </style>
+</head>
+<body>
+<main class="game-shell">
+  <section class="top-bar" aria-label="Game controls">
+    <div class="title">⚡ Ping Pong</div>
+    <div class="scoreboard" aria-live="polite">
+      <div class="score-box">
+        <span class="score-label" id="p1Label">Player 1</span>
+        <span id="p1Score">0</span>
+      </div>
+      <span>:</span>
+      <div class="score-box">
+        <span class="score-label" id="p2Label">Player 2</span>
+        <span id="p2Score">0</span>
+      </div>
+    </div>
+    <div class="controls">
+      <span id="roleBadge" class="badge hidden"></span>
+      <span id="statusBadge" class="badge badge-connecting">Connecting…</span>
+      <button id="startBtn" disabled>Start</button>
+      <button id="pauseBtn" disabled>Pause</button>
+      <button id="resetBtn" disabled>Reset</button>
+    </div>
+  </section>
+
+  <section class="canvas-wrap">
+    <canvas id="gameCanvas" width="960" height="540" aria-label="Ping pong game canvas"></canvas>
+    <div id="overlay" class="overlay">
+      <div class="message">
+        <h1><span class="spin"></span>Connecting</h1>
+        <p>Connecting to server on <strong>ws://localhost:8080</strong>…</p>
+        <p>Make sure to run <kbd>node server.js</kbd> first.</p>
+      </div>
+    </div>
+  </section>
+
+  <div class="help">
+    Mouse / touch to move &nbsp;•&nbsp;
+    <kbd>W</kbd>/<kbd>S</kbd> or <kbd>↑</kbd>/<kbd>↓</kbd> &nbsp;•&nbsp;
+    <kbd>Space</kbd> start/pause &nbsp;•&nbsp;
+    <kbd>R</kbd> reset <em>(host only)</em>
+  </div>
+</main>
+
+<script>
+// ─── Config ──────────────────────────────────────────────────────────────────
+// Always connect to the same host that served the page — works for both localhost and LAN IPs
+const WS_URL = `ws://${location.hostname}:8080`;
+
+// ─── Canvas ───────────────────────────────────────────────────────────────────
+const canvas  = document.getElementById('gameCanvas');
+const ctx     = canvas.getContext('2d');
+const W = canvas.width, H = canvas.height;
+
+// ─── UI refs ─────────────────────────────────────────────────────────────────
+const p1ScoreEl   = document.getElementById('p1Score');
+const p2ScoreEl   = document.getElementById('p2Score');
+const p1Label     = document.getElementById('p1Label');
+const p2Label     = document.getElementById('p2Label');
+const overlay     = document.getElementById('overlay');
+const startBtn    = document.getElementById('startBtn');
+const pauseBtn    = document.getElementById('pauseBtn');
+const resetBtn    = document.getElementById('resetBtn');
+const roleBadge   = document.getElementById('roleBadge');
+const statusBadge = document.getElementById('statusBadge');
+
+// ─── Game constants ───────────────────────────────────────────────────────────
+const WINNING  = 10;
+const PAD_SPD  = 9;
+const BALL_BOOST = 1.025;
+const SPEED_LIM  = 15;
+
+// ─── Game objects ─────────────────────────────────────────────────────────────
+const left  = { x: 28,      y: H/2-54, w: 14, h: 108, score: 0 };
+const right = { x: W - 42,  y: H/2-54, w: 14, h: 108, score: 0 };
+const ball  = { x: W/2, y: H/2, r: 9, vx: 6.2, vy: 3.2 };
+
+let running  = false;
+let gameOver = false;
+let myRole   = null;   // 'host' | 'guest'
+let ws       = null;
+let frameId  = null;
+const keys   = { up: false, down: false };
+
+// My paddle reference (set after role assignment)
+let myPad = null, opPad = null;
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+const rand  = (a, b) => a + Math.random() * (b - a);
+
+function setStatus(text, cls) {
+  statusBadge.textContent = text;
+  statusBadge.className = 'badge ' + cls;
+}
+
+function setOverlay(title, line1, line2 = '') {
+  overlay.classList.remove('hidden');
+  overlay.innerHTML = `<div class="message">
+    <h1>${title}</h1>
+    <p>${line1}</p>
+    ${line2 ? `<p>${line2}</p>` : ''}
+  </div>`;
+}
+
+function hideOverlay() { overlay.classList.add('hidden'); }
+
+function updateScoreUI() {
+  p1ScoreEl.textContent = left.score;
+  p2ScoreEl.textContent = right.score;
+}
+
+// ─── Ball physics (host only) ─────────────────────────────────────────────────
+function resetBall(serveLeft = Math.random() > 0.5) {
+  ball.x = W / 2; ball.y = H / 2;
+  const angle = rand(-0.4, 0.4);
+  ball.vx = 6.2 * (serveLeft ? -1 : 1);
+  ball.vy = 6.2 * angle + (Math.random() > 0.5 ? 1 : -1) * 2.2;
+}
+
+function collide(pad) {
+  return ball.x - ball.r < pad.x + pad.w &&
+         ball.x + ball.r > pad.x &&
+         ball.y + ball.r > pad.y &&
+         ball.y - ball.r < pad.y + pad.h;
+}
+
+function handleHit(pad, goRight) {
+  const rel = (ball.y - (pad.y + pad.h / 2)) / (pad.h / 2);
+  ball.vx = Math.abs(ball.vx) * BALL_BOOST * (goRight ? 1 : -1);
+  ball.vy = rel * 7.8;
+  ball.vx = clamp(ball.vx, -SPEED_LIM, SPEED_LIM);
+  ball.vy = clamp(ball.vy, -SPEED_LIM, SPEED_LIM);
+}
+
+function updateBall() {
+  ball.x += ball.vx;
+  ball.y += ball.vy;
+
+  if (ball.y - ball.r <= 16)       { ball.y = 16 + ball.r;      ball.vy *= -1; }
+  if (ball.y + ball.r >= H - 16)   { ball.y = H - 16 - ball.r;  ball.vy *= -1; }
+
+  if (collide(left)  && ball.vx < 0) { ball.x = left.x + left.w + ball.r;  handleHit(left,  true);  }
+  if (collide(right) && ball.vx > 0) { ball.x = right.x - ball.r;           handleHit(right, false); }
+
+  if (ball.x < -30)   { right.score++; afterPoint(false); }
+  if (ball.x > W + 30){ left.score++;  afterPoint(true);  }
+}
+
+function afterPoint(leftWon) {
+  updateScoreUI();
+  if (left.score >= WINNING || right.score >= WINNING) {
+    gameOver = true; running = false;
+    const iWon = (myRole === 'host') ? leftWon : !leftWon;
+    const msg = { type: 'gameover', leftWon, ls: left.score, rs: right.score };
+    sendMsg(msg);
+    setOverlay(iWon ? '🏆 You Win!' : '😔 You Lose',
+      `Final score: ${left.score} : ${right.score}`,
+      'Press Reset to play again.');
+    return;
+  }
+  resetBall(!leftWon);
+}
+
+// ─── Drawing ─────────────────────────────────────────────────────────────────
+function drawTable() {
+  ctx.clearRect(0, 0, W, H);
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, '#10203a'); g.addColorStop(1, '#08101e');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+
+  ctx.strokeStyle = 'rgba(255,255,255,0.18)'; ctx.lineWidth = 3;
+  ctx.setLineDash([14, 18]);
+  ctx.beginPath(); ctx.moveTo(W/2, 16); ctx.lineTo(W/2, H-16); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.strokeStyle = 'rgba(255,255,255,0.10)'; ctx.lineWidth = 2;
+  ctx.strokeRect(12, 12, W-24, H-24);
+}
+
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x+r, y);
+  ctx.arcTo(x+w, y, x+w, y+h, r); ctx.arcTo(x+w, y+h, x, y+h, r);
+  ctx.arcTo(x, y+h, x, y, r);     ctx.arcTo(x, y, x+w, y, r);
+  ctx.closePath();
+}
+
+function drawPad(pad, isLeft) {
+  const mine = (myRole === 'host') ? isLeft : !isLeft;
+  ctx.shadowColor = isLeft ? 'rgba(112,211,255,0.7)' : 'rgba(255,120,120,0.55)';
+  ctx.shadowBlur  = mine ? 22 : 14;
+  ctx.fillStyle   = isLeft ? '#70d3ff' : '#ff7878';
+  roundRect(pad.x, pad.y, pad.w, pad.h, 8); ctx.fill();
+  ctx.shadowBlur = 0;
+}
+
+function drawBall() {
+  ctx.shadowColor = 'rgba(255,255,255,0.75)'; ctx.shadowBlur = 18;
+  ctx.fillStyle = '#fff';
+  ctx.beginPath(); ctx.arc(ball.x, ball.y, ball.r, 0, Math.PI*2); ctx.fill();
+  ctx.shadowBlur = 0;
+}
+
+function draw() {
+  drawTable();
+  drawPad(left,  true);
+  drawPad(right, false);
+  drawBall();
+}
+
+// ─── Input ────────────────────────────────────────────────────────────────────
+function applyInput() {
+  if (!myPad) return;
+  if (keys.up)   myPad.y -= PAD_SPD;
+  if (keys.down) myPad.y += PAD_SPD;
+  myPad.y = clamp(myPad.y, 18, H - myPad.h - 18);
+}
+
+function pointerY(clientY) {
+  const rect = canvas.getBoundingClientRect();
+  return (clientY - rect.top) * (H / rect.height);
+}
+
+canvas.addEventListener('mousemove', e => {
+  if (!myPad) return;
+  myPad.y = clamp(pointerY(e.clientY) - myPad.h/2, 18, H - myPad.h - 18);
+});
+
+canvas.addEventListener('touchmove', e => {
+  e.preventDefault();
+  if (!myPad) return;
+  myPad.y = clamp(pointerY(e.touches[0].clientY) - myPad.h/2, 18, H - myPad.h - 18);
+}, { passive: false });
+
+window.addEventListener('keydown', e => {
+  const k = e.key.toLowerCase();
+  if (k === 'w' || k === 'arrowup')    { keys.up   = true; e.preventDefault(); }
+  if (k === 's' || k === 'arrowdown')  { keys.down = true; e.preventDefault(); }
+  if (k === ' ') { e.preventDefault(); running ? pauseGame() : startGame(); }
+  if (k === 'r' && myRole === 'host')  resetGame();
+});
+
+window.addEventListener('keyup', e => {
+  const k = e.key.toLowerCase();
+  if (k === 'w' || k === 'arrowup')   keys.up   = false;
+  if (k === 's' || k === 'arrowdown') keys.down = false;
+});
+
+// ─── Game control (host authoritative) ───────────────────────────────────────
+function startGame() {
+  if (myRole !== 'host' || !opponentConnected) return;
+  if (gameOver) return;
+  running = true;
+  hideOverlay();
+  sendMsg({ type: 'start' });
+  cancelAnimationFrame(frameId);
+  frameId = requestAnimationFrame(hostLoop);
+}
+
+function pauseGame() {
+  if (myRole !== 'host') return;
+  running = !running;
+  if (running) {
+    hideOverlay();
+    sendMsg({ type: 'resume' });
+    frameId = requestAnimationFrame(hostLoop);
+  } else {
+    setOverlay('⏸ Paused', 'Press Space or Start to resume.');
+    sendMsg({ type: 'pause' });
+  }
+}
+
+function resetGame() {
+  if (myRole !== 'host') return;
+  left.score = right.score = 0;
+  left.y  = H/2 - left.h/2;
+  right.y = H/2 - right.h/2;
+  gameOver = false; running = false;
+  resetBall(false);
+  updateScoreUI();
+  sendMsg({ type: 'reset' });
+  setOverlay('Game Reset', 'Press Start to play again.');
+  draw();
+}
+
+// ─── Game loops ───────────────────────────────────────────────────────────────
+let opponentConnected = false;
+
+function hostLoop(ts) {
+  if (!running) return;
+  applyInput();
+  updateBall();
+  draw();
+  // Broadcast state
+  sendMsg({
+    type: 'state',
+    lx: left.x,  ly: left.y,
+    rx: right.x, ry: right.y,
+    bx: ball.x,  by: ball.y, bvx: ball.vx, bvy: ball.vy,
+    ls: left.score, rs: right.score
+  });
+  frameId = requestAnimationFrame(hostLoop);
+}
+
+// Guest render loop — redraws at 60 fps and sends paddle to host
+function guestLoop() {
+  applyInput();
+  // Only send paddle position once the game is actually running
+  if (running) sendMsg({ type: 'paddleY', y: myPad.y });
+  draw();
+  frameId = requestAnimationFrame(guestLoop);
+}
+
+// ─── WebSocket ────────────────────────────────────────────────────────────────
+function sendMsg(obj) {
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+}
+
+function connect() {
+  ws = new WebSocket(WS_URL);
+
+  ws.onopen = () => {
+    setStatus('Connected', 'badge-ready');
+    setOverlay('<span class="spin"></span>Waiting…', 'Waiting for another player to join…', 'Share this page in a second browser tab or device.');
+  };
+
+  ws.onmessage = e => {
+    const msg = JSON.parse(e.data);
+
+    if (msg.type === 'role') {
+      myRole = msg.role;
+
+      if (myRole === 'host') {
+        myPad = left; opPad = right;
+        p1Label.textContent = 'You (P1)';
+        p2Label.textContent = 'Opponent';
+        roleBadge.textContent = '🎮 Player 1 (Left)';
+        roleBadge.className = 'badge badge-p1';
+        roleBadge.classList.remove('hidden');
+        // Keep buttons disabled until opponent joins
+        startBtn.disabled = pauseBtn.disabled = resetBtn.disabled = true;
+        setStatus('Waiting…', 'badge-waiting');
+        setOverlay('<span class="spin"></span>Waiting for Opponent…', 'You are <strong>Player 1</strong> — left paddle (blue).', 'Share the server URL with your friend.');
+      } else {
+        // guest
+        myPad = right; opPad = left;
+        opponentConnected = true;
+        p1Label.textContent = 'Opponent';
+        p2Label.textContent = 'You (P2)';
+        roleBadge.textContent = '🎮 Player 2 (Right)';
+        roleBadge.className = 'badge badge-p2';
+        roleBadge.classList.remove('hidden');
+        setStatus('Ready — waiting for host', 'badge-ready');
+        setOverlay('Game Found! 🎉', 'You are <strong>Player 2</strong> — right paddle (red).', 'Waiting for Player 1 to start the game…');
+        // Guest starts its own render loop immediately so paddle responds
+        cancelAnimationFrame(frameId);
+        frameId = requestAnimationFrame(guestLoop);
+      }
+    }
+
+    // Host learns opponent joined
+    if (msg.type === 'guestJoined' && myRole === 'host') {
+      opponentConnected = true;
+      startBtn.disabled = false;
+      pauseBtn.disabled = false;
+      resetBtn.disabled = false;
+      setStatus('Ready', 'badge-ready');
+      setOverlay('Opponent Connected! 🎉', 'You are <strong>Player 1</strong> — left paddle (blue).', 'Press <strong>Start</strong> when ready!');
+    }
+
+    // Host receives guest paddle
+    if (msg.type === 'paddleY' && myRole === 'host') {
+      right.y = clamp(msg.y, 18, H - right.h - 18);
+    }
+
+    // Guest receives full game state
+    if (msg.type === 'state' && myRole === 'guest') {
+      // Only update OPPONENT paddle (left) and ball — never overwrite our own paddle (right)
+      // Overwriting right.y here would cancel every mouse/key move the guest makes
+      left.y  = msg.ly;
+      ball.x  = msg.bx; ball.y  = msg.by;
+      ball.vx = msg.bvx; ball.vy = msg.bvy;
+      left.score = msg.ls; right.score = msg.rs;
+      if (!running) {
+        running = true;
+        hideOverlay();
+        // Ensure the guest render loop is live
+        cancelAnimationFrame(frameId);
+        frameId = requestAnimationFrame(guestLoop);
+      }
+      updateScoreUI();
+    }
+
+    if (msg.type === 'start' && myRole === 'guest') {
+      running = true; gameOver = false;
+      hideOverlay();
+      // Restart guest loop if it was stopped (e.g. after a reset)
+      cancelAnimationFrame(frameId);
+      frameId = requestAnimationFrame(guestLoop);
+    }
+
+    if (msg.type === 'pause' && myRole === 'guest') {
+      running = false;
+      setOverlay('⏸ Paused', 'Player 1 paused the game.', 'Waiting to resume…');
+    }
+
+    if (msg.type === 'resume' && myRole === 'guest') {
+      running = true; hideOverlay();
+    }
+
+    if (msg.type === 'reset' && myRole === 'guest') {
+      left.score = right.score = 0;
+      left.y = H/2 - left.h/2; right.y = H/2 - right.h/2;
+      gameOver = false; running = false;
+      resetBall(false); updateScoreUI();
+      setOverlay('Game Reset', 'Waiting for Player 1 to start…');
+    }
+
+    if (msg.type === 'gameover' && myRole === 'guest') {
+      running = false; gameOver = true;
+      left.score = msg.ls; right.score = msg.rs;
+      updateScoreUI();
+      const iWon = !msg.leftWon;
+      setOverlay(iWon ? '🏆 You Win!' : '😔 You Lose',
+        `Final score: ${msg.ls} : ${msg.rs}`,
+        'Waiting for Player 1 to reset…');
+    }
+
+    if (msg.type === 'opponentLeft') {
+      running = false;
+      opponentConnected = false;
+      setStatus('Disconnected', 'badge-error');
+      setOverlay('Opponent Left', 'The other player disconnected.', 'Refresh the page to find a new match.');
+      if (myRole === 'host') {
+        startBtn.disabled = pauseBtn.disabled = true;
+      }
+    }
+  };
+
+  ws.onerror = () => {
+    setStatus('Error', 'badge-error');
+    setOverlay('Connection Failed',
+      'Could not connect to <strong>ws://localhost:8080</strong>.',
+      'Run <kbd>node server.js</kbd> in your terminal first.');
+  };
+
+  ws.onclose = () => {
+    if (opponentConnected) return; // handled by opponentLeft
+    setStatus('Offline', 'badge-error');
+  };
+}
+
+// ─── Button handlers ──────────────────────────────────────────────────────────
+startBtn.addEventListener('click', startGame);
+pauseBtn.addEventListener('click', pauseGame);
+resetBtn.addEventListener('click', resetGame);
+
+// ─── Init ─────────────────────────────────────────────────────────────────────
+draw();
+connect();
+</script>
+</body>
+</html>
